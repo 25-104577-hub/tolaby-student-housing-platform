@@ -1,0 +1,621 @@
+// ============================================================
+// طلابـي | Tolaby — Prisma Schema
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ------------------------------------------------------------
+// Enums
+// ------------------------------------------------------------
+
+enum UserRole {
+  STUDENT
+  OWNER
+  ADMIN
+}
+
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+  SUSPENDED
+}
+
+enum PropertyType {
+  APARTMENT
+  ROOM
+  STUDIO
+  SHARED_APARTMENT
+  STUDENT_RESIDENCE
+}
+
+enum PropertyStatus {
+  PENDING_REVIEW
+  VERIFIED
+  REJECTED
+  SUSPENDED
+}
+
+enum AvailabilityStatus {
+  AVAILABLE
+  ON_HOLD
+  BOOKED
+}
+
+enum VisitStatus {
+  REQUESTED
+  ACCEPTED
+  REJECTED
+  RESCHEDULED
+  COMPLETED
+  CANCELLED
+}
+
+enum BookingStatus {
+  DRAFT
+  VISIT_REQUESTED
+  VISIT_CONFIRMED
+  BOOKING_REQUESTED
+  OWNER_ACCEPTED
+  OWNER_REJECTED
+  PAYMENT_PENDING
+  PAYMENT_PROCESSING
+  PAID
+  CONFIRMED
+  ENDED_EARLY
+  CANCELLED
+  DISPUTED
+  REFUNDED
+  COMPLETED
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  PAID
+  FAILED
+  REFUNDED
+  CANCELLED
+}
+
+enum PaymentKind {
+  DEPOSIT
+  COMMISSION
+  RENEWAL_FEE
+}
+
+enum RefundStatus {
+  NOT_REQUESTED
+  REQUESTED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  PROCESSING
+  COMPLETED
+}
+
+enum DisputeCategory {
+  FRAUD
+  FAKE_LISTING
+  PROPERTY_MISMATCH
+  PAYMENT_ISSUE
+  CANCELLATION
+  OWNER_ISSUE
+  STUDENT_ISSUE
+  OTHER
+}
+
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED
+  REJECTED
+}
+
+enum VerificationDocType {
+  NATIONAL_ID_FRONT
+  NATIONAL_ID_BACK
+  PASSPORT
+  UNIVERSITY_EMAIL
+  STUDENT_ID
+  TITLE_DEED
+  REGISTERED_LEASE
+  UTILITY_BILL
+  AUTHORIZATION_LETTER
+  OTHER
+}
+
+// ------------------------------------------------------------
+// Core identity
+// ------------------------------------------------------------
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  phone        String
+  role         UserRole
+  isSuspended  Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  studentProfile StudentProfile?
+  ownerProfile   OwnerProfile?
+
+  sentMessages       Message[]           @relation("MessageSender")
+  notifications      Notification[]
+  verificationReqs   VerificationRequest[] @relation("VerificationSubject")
+  reviewedAdminActions AdminAction[]     @relation("AdminActor")
+  favorites          Favorite[]
+
+  @@index([role])
+}
+
+model StudentProfile {
+  id             String             @id @default(uuid())
+  userId         String             @unique
+  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fullName       String
+  university     String
+  faculty        String?
+  academicYear   Int?
+  profilePhotoUrl String?
+  verificationStatus VerificationStatus @default(PENDING)
+  createdAt      DateTime           @default(now())
+
+  favorites       Favorite[]
+  visits          Visit[]
+  bookingRequests BookingRequest[]
+  bookings        Booking[]
+  reviewsGiven    Review[]           @relation("StudentReviewer")
+  reviewsReceived Review[]           @relation("StudentReviewee")
+  disputesOpened  Dispute[]
+  conversations   ConversationParticipant[]
+
+  @@index([verificationStatus])
+}
+
+model OwnerProfile {
+  id             String             @id @default(uuid())
+  userId         String             @unique
+  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fullName       String
+  profilePhotoUrl String?
+  verificationStatus VerificationStatus @default(PENDING)
+  createdAt      DateTime           @default(now())
+
+  properties      Property[]
+  reviewsGiven    Review[]           @relation("OwnerReviewer")
+  reviewsReceived Review[]           @relation("OwnerReviewee")
+  conversations   ConversationParticipant[]
+
+  @@index([verificationStatus])
+}
+
+// ------------------------------------------------------------
+// Universities & matching
+// ------------------------------------------------------------
+
+model University {
+  id        String     @id @default(uuid())
+  name      String
+  city      String
+  latitude  Float
+  longitude Float
+  properties PropertyUniversityDistance[]
+}
+
+// precomputed distance cache: property <-> university
+model PropertyUniversityDistance {
+  id           String      @id @default(uuid())
+  propertyId   String
+  property     Property    @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  universityId String
+  university   University  @relation(fields: [universityId], references: [id], onDelete: Cascade)
+  distanceKm   Float
+  etaMinutes   Int
+
+  @@unique([propertyId, universityId])
+}
+
+// ------------------------------------------------------------
+// Properties
+// ------------------------------------------------------------
+
+model Property {
+  id            String         @id @default(uuid())
+  ownerId       String
+  owner         OwnerProfile   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  title         String
+  description   String
+  propertyType  PropertyType
+  city          String
+  area          String
+  address       String
+  latitude      Float
+  longitude     Float
+
+  monthlyRent   Decimal        @db.Decimal(10, 2)
+  deposit       Decimal?       @db.Decimal(10, 2)
+  bedrooms      Int
+  beds          Int
+  bathrooms     Int
+  furnished     Boolean        @default(false)
+
+  wifi              Boolean @default(false)
+  airConditioning   Boolean @default(false)
+  elevator          Boolean @default(false)
+  washingMachine    Boolean @default(false)
+  kitchen           Boolean @default(false)
+  privateBathroom   Boolean @default(false)
+  utilitiesIncluded Boolean @default(false)
+
+  houseRules    String?
+  status        PropertyStatus @default(PENDING_REVIEW)
+  availability  AvailabilityStatus @default(AVAILABLE)
+
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  images        PropertyImage[]
+  universities  PropertyUniversityDistance[]
+  favorites     Favorite[]
+  visits        Visit[]
+  bookingRequests BookingRequest[]
+  bookings      Booking[]
+  conversations Conversation[]
+  reviews       Review[]
+  availabilityHolds AvailabilityHold[]
+
+  @@index([status])
+  @@index([city, area])
+  @@index([monthlyRent])
+}
+
+model PropertyImage {
+  id         String   @id @default(uuid())
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  url        String
+  phash      String?  // perceptual hash for duplicate/stock photo detection
+  flaggedDuplicateOf String? // propertyImageId of a likely-matching image, for admin review
+  createdAt  DateTime @default(now())
+}
+
+model Favorite {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  studentId  String
+  student    StudentProfile @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([studentId, propertyId])
+}
+
+// ------------------------------------------------------------
+// Availability locking (Section 13B)
+// ------------------------------------------------------------
+
+model AvailabilityHold {
+  id         String   @id @default(uuid())
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  bookingRequestId String @unique
+  bookingRequest   BookingRequest @relation(fields: [bookingRequestId], references: [id], onDelete: Cascade)
+  startDate  DateTime
+  endDate    DateTime
+  expiresAt  DateTime  // auto-release timeout (e.g. 48-72h)
+  releasedAt DateTime?
+  createdAt  DateTime  @default(now())
+}
+
+// ------------------------------------------------------------
+// Chat (Section 24)
+// ------------------------------------------------------------
+
+model Conversation {
+  id         String   @id @default(uuid())
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  participants ConversationParticipant[]
+  messages     Message[]
+}
+
+model ConversationParticipant {
+  id             String   @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  studentId      String?
+  student        StudentProfile? @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  ownerId        String?
+  owner          OwnerProfile?   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, studentId, ownerId])
+}
+
+model Message {
+  id             String   @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String
+  sender         User     @relation("MessageSender", fields: [senderId], references: [id])
+  content        String
+  imageUrl       String?
+  isFlagged      Boolean  @default(false)
+  flagReason     String?  // e.g. "phone_number_detected", "external_url_detected"
+  readAt         DateTime?
+  createdAt      DateTime @default(now())
+
+  @@index([conversationId])
+  @@index([isFlagged])
+}
+
+// ------------------------------------------------------------
+// Visits (Section 2 Step 4)
+// ------------------------------------------------------------
+
+model Visit {
+  id           String      @id @default(uuid())
+  propertyId   String
+  property     Property    @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  studentId    String
+  student      StudentProfile @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  requestedDate DateTime
+  requestedTime String
+  message      String?
+  isVirtual    Boolean     @default(false)
+  status       VisitStatus @default(REQUESTED)
+  suggestedDate DateTime?
+  suggestedTime String?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+}
+
+// ------------------------------------------------------------
+// Booking flow (Section 2 & 2B)
+// ------------------------------------------------------------
+
+model BookingRequest {
+  id              String   @id @default(uuid())
+  propertyId      String
+  property        Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  studentId       String
+  student         StudentProfile @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  moveInDate      DateTime
+  durationMonths  Int
+  occupants       Int
+  specialRequests String?
+
+  status          BookingStatus @default(BOOKING_REQUESTED)
+  ownerNote       String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  hold            AvailabilityHold?
+  booking         Booking?
+}
+
+model Booking {
+  id               String   @id @default(uuid())
+  bookingRequestId String   @unique
+  bookingRequest   BookingRequest @relation(fields: [bookingRequestId], references: [id])
+
+  propertyId       String
+  property         Property @relation(fields: [propertyId], references: [id])
+  studentId        String
+  student          StudentProfile @relation(fields: [studentId], references: [id])
+
+  moveInDate       DateTime
+  moveOutDate      DateTime
+  monthlyRent      Decimal  @db.Decimal(10, 2)
+  depositAmount    Decimal? @db.Decimal(10, 2)
+  commissionAmount Decimal  @db.Decimal(10, 2)
+  rentPaymentMethod String  @default("direct_between_parties") // see Section 1B
+
+  status           BookingStatus @default(PAYMENT_PENDING)
+  endedEarlyReason String?
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  payments         Payment[]
+  agreement        RentalAgreement?
+  reviews          Review[]
+  disputes         Dispute[]
+}
+
+// ------------------------------------------------------------
+// Payments, refunds, invoices (Section 1B, 4, 19, 20)
+// ------------------------------------------------------------
+
+model Payment {
+  id          String        @id @default(uuid())
+  bookingId   String
+  booking     Booking       @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  kind        PaymentKind
+  amount      Decimal       @db.Decimal(10, 2)
+  status      PaymentStatus @default(PENDING)
+  provider    String        @default("mock") // "mock" | "paymob" etc — see src/lib/payments.ts
+  providerRef String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  refund      Refund?
+  invoice     Invoice?
+}
+
+model Refund {
+  id        String       @id @default(uuid())
+  paymentId String       @unique
+  payment   Payment      @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  amount    Decimal      @db.Decimal(10, 2)
+  reason    String
+  status    RefundStatus @default(NOT_REQUESTED)
+  adminNote String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+}
+
+model Invoice {
+  id         String   @id @default(uuid())
+  paymentId  String   @unique
+  payment    Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  amount     Decimal  @db.Decimal(10, 2)
+  taxAmount  Decimal? @db.Decimal(10, 2) // placeholder — real e-invoicing is a follow-up integration
+  issuedAt   DateTime @default(now())
+  pdfUrl     String?
+}
+
+// ------------------------------------------------------------
+// Rental agreement (Section 9 / Step 9)
+// ------------------------------------------------------------
+
+model RentalAgreement {
+  id               String   @id @default(uuid())
+  bookingId        String   @unique
+  booking          Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  cancellationPolicy String
+  rentPaymentMethod  String
+  isLegallyBinding   Boolean @default(false) // true only if legally configured & reviewed
+  pdfUrl             String?
+  createdAt          DateTime @default(now())
+}
+
+// ------------------------------------------------------------
+// Reviews (Section 22)
+// ------------------------------------------------------------
+
+model Review {
+  id            String   @id @default(uuid())
+  bookingId     String
+  booking       Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  propertyId    String
+  property      Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  // student reviewing owner/property
+  studentReviewerId String?
+  studentReviewer    StudentProfile? @relation("StudentReviewer", fields: [studentReviewerId], references: [id])
+  ownerRevieweeId    String?
+  ownerReviewee      OwnerProfile?   @relation("OwnerReviewee", fields: [ownerRevieweeId], references: [id])
+
+  // owner reviewing student
+  ownerReviewerId    String?
+  ownerReviewer      OwnerProfile?   @relation("OwnerReviewer", fields: [ownerReviewerId], references: [id])
+  studentRevieweeId  String?
+  studentReviewee    StudentProfile? @relation("StudentReviewee", fields: [studentRevieweeId], references: [id])
+
+  cleanliness   Int?
+  accuracy      Int?
+  communication Int?
+  location      Int?
+  safety        Int?
+  comment       String?
+  isModerated   Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  @@unique([bookingId, studentReviewerId])
+  @@unique([bookingId, ownerReviewerId])
+}
+
+// ------------------------------------------------------------
+// Disputes (Section 3, 23)
+// ------------------------------------------------------------
+
+model Dispute {
+  id          String          @id @default(uuid())
+  bookingId   String
+  booking     Booking         @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  openedById  String
+  openedBy    StudentProfile  @relation(fields: [openedById], references: [id])
+  category    DisputeCategory
+  description String
+  evidenceUrls String[]
+  status      DisputeStatus   @default(OPEN)
+  resolution  String?
+  refundOutcome String?       // "full" | "partial" | "none" | "escalate"
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+}
+
+// ------------------------------------------------------------
+// Verification (Section 9, 10, 27)
+// ------------------------------------------------------------
+
+model VerificationRequest {
+  id          String              @id @default(uuid())
+  userId      String
+  user        User                @relation("VerificationSubject", fields: [userId], references: [id], onDelete: Cascade)
+  docType     VerificationDocType
+  fileUrl     String              // private bucket only
+  status      VerificationStatus  @default(PENDING)
+  reviewedById String?
+  reviewedAt  DateTime?
+  rejectionReason String?
+  createdAt   DateTime            @default(now())
+
+  accessLogs  DocumentAccessLog[]
+}
+
+model DocumentAccessLog {
+  id                     String   @id @default(uuid())
+  verificationRequestId  String
+  verificationRequest    VerificationRequest @relation(fields: [verificationRequestId], references: [id], onDelete: Cascade)
+  accessedByAdminId      String
+  accessedAt             DateTime @default(now())
+}
+
+// ------------------------------------------------------------
+// Notifications, admin, platform settings (Section 18, 25, 26, 27)
+// ------------------------------------------------------------
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  body      String
+  linkUrl   String?
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId, readAt])
+}
+
+model AdminAction {
+  id         String   @id @default(uuid())
+  adminId    String
+  admin      User     @relation("AdminActor", fields: [adminId], references: [id])
+  actionType String   // "verify_owner" | "suspend_user" | "resolve_dispute" | "process_refund" | ...
+  targetType String   // "User" | "Property" | "Booking" | "Dispute" | ...
+  targetId   String
+  notes      String?
+  createdAt  DateTime @default(now())
+}
+
+model PlatformSettings {
+  id                  String  @id @default("singleton")
+  commissionPercentage Decimal @db.Decimal(5, 4) @default(0.25)
+  bookingDeposit       Decimal @db.Decimal(10, 2) @default(250)
+  holdTimeoutHours     Int     @default(60)
+  renewalFeeApplies    Boolean @default(false)
+  refundRulesJson      Json    @default("{}")
+  cancellationRulesJson Json   @default("{}")
+  updatedAt            DateTime @updatedAt
+}
